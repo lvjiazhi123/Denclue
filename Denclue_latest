@@ -1,0 +1,175 @@
+import pandas as pd
+import numpy as np
+from mpl_toolkits.mplot3d import Axes3D
+import matplotlib.pyplot as plt
+import math
+import collections as c
+import networkx as nx
+with open('/Users/lvjiazhi/PycharmProjects/pythonProject4/data/11.in') as f:
+    lines = f.readlines()
+    x, y = [], []
+    for line in lines:
+        a, b = list(map(float, line.strip().split()))
+        x.append(a)
+        y.append(b)
+    x = np.array(x)
+    y = np.array(y)
+plt.scatter(x,y)
+plt.show();
+H = 0.5  # Smoothing parameter
+K = 0.5  # Linkage distance
+DELTA = 0.2  # Speed of convergence
+XI = 0.01  # Denoising parameter
+MAX_TIMES = 50
+def sqrs(x):
+    return (x ** 2).sum()
+def slen(x):
+    return sqrs(x) ** 0.5
+def dist(x, y):
+    return sqrs(x - y) ** 0.5
+def k_gauss(x):
+    return math.exp(-0.5 * sqrs(x)) / (2 * math.pi)
+class Denclue2D(object):
+    def __init__(self, x, y):
+        self.x = x
+        self.y = y
+        self.n = len(x)
+        assert(self.n == len(y))
+        self.ps = [np.array([self.x[i], self.y[i]]) for i in range(self.n)]
+        self.attrs = []
+        self.bel = []
+        self.is_out = []
+        self.cluster_id = []
+        self.den=[]
+    def f_gauss(self, x): #密度值
+        s = 0
+        for p in self.ps:
+            s += k_gauss((x - p) / H)
+        return s / (self.n * (H ** 2))
+    def delta_f(self, x):
+        s = np.array([0., 0.])
+        for p in self.ps:
+            s += k_gauss((x - p) / H) * (p - x)
+        return s / ((H ** 2) * self.n)
+    def next_pos(self, x):
+        d = self.delta_f(x)
+        return x + d * DELTA / slen(d)
+    def get_max(self, start):
+        x = start
+        for i in range(MAX_TIMES):
+            y = self.next_pos(x)
+            if self.f_gauss(y) < self.f_gauss(x):
+                break
+            x = y
+        return x
+    def climbs(self):
+        for i in range(self.n):
+            print("clms", i, self.ps[i])
+            mx = self.get_max(self.ps[i])
+            self.attrs.append(mx)
+dc = Denclue2D(x, y)
+dc.climbs()
+g_clusters = nx.Graph()
+for i in dc.ps:
+    dc.bel.append(dc.f_gauss(i))
+for i in dc.attrs:
+    dc.den.append(dc.f_gauss(i))
+for j1 in range(dc.n):
+    g_clusters.add_node(j1, attr_dict={'attractor': dc.attrs[j1],'density':dc.bel[j1],'den_attrs': dc.den[j1]})
+for j1 in range(dc.n):
+    for j2 in (x for x in range(dc.n) if x != j1):
+        if g_clusters.has_edge(j1, j2):
+            continue
+        diff = np.linalg.norm(g_clusters.nodes[j1]['attr_dict']['attractor'] - g_clusters.nodes[j2]['attr_dict']['attractor'])
+        if diff <= (2*DELTA):
+            g_clusters.add_edge(j1, j2)
+clusters = list(nx.connected_components(g_clusters))
+max_den=[]
+for j in range(len(clusters)):
+    num=0
+    max=0
+    for i in clusters[j]:
+        if(g_clusters.nodes[i]['attr_dict']['den_attrs']>max):
+            num=i
+            max=g_clusters.nodes[i]['attr_dict']['den_attrs']
+    max_den.append(num)
+for i in max_den:  # 找出簇的吸引子的密度最大，判断是否小于密度阈值，若小于则为False，簇正常为True
+    if (g_clusters.nodes[i]['attr_dict']['den_attrs'] < XI):
+        dc.is_out.append(False)
+    else:
+        dc.is_out.append(True)
+#开始合并相关的簇
+alter={}
+for i in range(dc.n):
+    alter[i]=False
+label={}
+for i in range(dc.n):
+    for j in range(len(clusters)):
+        for k in clusters[j]:
+            label[k]=j
+merge_cluster={} #不需要合并的簇
+merge_cluster2={} #需要合并的簇
+for i in range(len(clusters)):
+    merge_cluster2[i]=[]
+for i in range(len(clusters)):
+    merge_cluster[i]=[]
+for i in range(dc.n):
+    for j in range(i+1,dc.n):
+        if(np.linalg.norm(dc.ps[i]-dc.ps[j])<=0.5 \
+        and label[i] !=label[j] \
+        and dc.is_out[label[i]] \
+        and dc.is_out[label[j]] \
+        and label[j] not in merge_cluster2[label[i]]):
+            merge_cluster2[label[i]].append(label[j])
+            if(g_clusters.nodes[i]['attr_dict']['density']<XI \
+            and g_clusters.nodes[j]['attr_dict']['density']<XI \
+            and label[j] not in merge_cluster[label[i]]):
+                merge_cluster[label[i]].append(label[j])
+for i in range(len(merge_cluster)):
+    for j in merge_cluster[i]:
+        for n in merge_cluster2[i]:
+            if(j==n):
+                merge_cluster2[i].remove(j)
+#元素标签改变
+merge_clusters = nx.Graph()
+for i in range(len(merge_cluster2)):
+    for j in merge_cluster2[i]:
+        merge_clusters.add_node(j)
+for i in range(len(merge_cluster2)):
+    for j in merge_cluster2[i]:
+        merge_clusters.add_edge(i,j)
+fin_clu = list(nx.connected_components(merge_clusters))
+for i in range(len(fin_clu)):
+    for j in fin_clu[i]:
+        for k in label:
+            if(label[k] == j):
+                label[k]=1000+i
+#给点贴上标签
+label_point=[]
+for i in range(dc.n):
+    label_point.append(False)
+for i in range(len(clusters)):
+    for j in clusters[i]:
+        if(dc.is_out[i]==True):
+            label_point[j]=True
+#元素标签重新进行排序
+count=0 #进行计数有多少个簇
+label_color=[]
+for i in range(len(label)):
+    if((label[i]) not in label_color and label_point[i]==True):
+        label_color.append(label[i])
+        count+=1
+#进行颜色排序
+cata=-1
+for i in range(len(label_color)):
+    cata+=1
+    for j in label:
+        if(label[j]==label_color[i]):
+            label[j]=cata
+colors = ['r', 'g', 'b','orange','pink','purple','yellow','green','gray','gold','hotpink','navy','brown']
+for i in label:
+    if(label_point[i]==True):
+         plt.scatter(dc.ps[i][0],dc.ps[i][1],c=colors[label[i]])
+    else:
+         plt.scatter(dc.ps[i][0],dc.ps[i][1],c='black')
+plt.show()
